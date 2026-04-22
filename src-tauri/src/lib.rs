@@ -323,6 +323,7 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   .iter()
                   .map(|(key, entry)| (key.clone(), entry.data.clone()))
                   .collect();
+                let collected_count = collected_map.len();
 
                 emit_bridge_log(
                   &app,
@@ -331,7 +332,7 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   &format!(
                     "Collecting active data for {} | {} active entries",
                     publish.topic,
-                    collected_map.len()
+                    collected_count
                   ),
                 );
 
@@ -340,6 +341,26 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   reason: "update".to_string(),
                   entries: collected_map,
                 };
+
+                let snapshot_preview = serde_json::to_string(&snapshot)
+                  .map(|json| {
+                    if json.chars().count() > 240 {
+                      format!("{}...", json.chars().take(240).collect::<String>())
+                    } else {
+                      json
+                    }
+                  })
+                  .unwrap_or_else(|_| "{}".to_string());
+
+                emit_bridge_log(
+                  &app,
+                  &config.id,
+                  "success",
+                  &format!(
+                    "Name: {} | Collected count: {} | data: {}",
+                    bridge_label, collected_count, snapshot_preview
+                  ),
+                );
 
                 serde_json::to_vec(&snapshot).unwrap_or_else(|_| b"{}".to_vec())
               } else {
