@@ -49,7 +49,6 @@ const emptyTopicMapping = {
   source: "",
   destination: "",
   collectData: false,
-  batchSize: "25",
 };
 
 const initialBridgeConfig = {
@@ -85,7 +84,6 @@ function normalizeTopicMappings(topicMappings, sourceTopic, destinationTopic) {
       source: mapping?.source || "",
       destination: mapping?.destination || "",
       collectData: Boolean(mapping?.collectData),
-      batchSize: String(mapping?.batchSize || "25"),
     }));
   }
 
@@ -94,7 +92,6 @@ function normalizeTopicMappings(topicMappings, sourceTopic, destinationTopic) {
       source: sourceTopic || "",
       destination: destinationTopic || "",
       collectData: false,
-      batchSize: "25",
     },
   ];
 }
@@ -1056,23 +1053,6 @@ function App() {
                               }
                             />
                             <span>Collect data before forwarding</span>
-                          </label>
-
-                          <label className="fieldGroup mappingBatchField">
-                            <span className="fieldLabel">Batch Size</span>
-                            <input
-                              className="fieldInput"
-                              value={mapping.batchSize || "25"}
-                              onChange={(event) =>
-                                handleTopicMappingChange(
-                                  index,
-                                  "batchSize",
-                                  event.target.value,
-                                )
-                              }
-                              placeholder="25"
-                              disabled={!mapping.collectData}
-                            />
                           </label>
                         </div>
                       </div>

@@ -1317,7 +1317,7 @@
 .topicMappingMeta {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
+  grid-template-columns: 1fr;
   gap: 12px;
   align-items: end;
 }
@@ -1333,11 +1333,6 @@
 
 .mappingToggleRow input {
   margin: 0;
-}
-
-.mappingBatchField .fieldInput:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .modalFooter {
@@ -1480,10 +1475,6 @@
   .bridgeTopicArrow,
   .topicMappingArrow {
     min-height: 24px;
-  }
-
-  .topicMappingMeta {
-    grid-template-columns: 1fr;
   }
 
 }

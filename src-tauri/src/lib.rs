@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{
+  collections::HashMap,
+  sync::Mutex,
+  time::{Duration, Instant},
+};
 
 use rumqttc::{AsyncClient, Event, MqttOptions, Outgoing, Packet, QoS, Transport};
 use serde::{Deserialize, Serialize};
@@ -21,7 +25,20 @@ struct TopicMapping {
   source: String,
   destination: String,
   collect_data: bool,
-  batch_size: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct CollectedPayloadEntry {
+  source_topic: String,
+  data: Value,
+  updated_at: Instant,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardPayloadEntry {
+  source_topic: String,
+  data: Value,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -238,7 +255,8 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
 
   let mut source_ready = false;
   let mut destination_ready = false;
-  let mut collected_payloads: HashMap<usize, Vec<Value>> = HashMap::new();
+  let mut collected_payloads: HashMap<usize, HashMap<String, CollectedPayloadEntry>> =
+    HashMap::new();
 
   loop {
     tokio::select! {
@@ -276,40 +294,38 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
               );
               let payload_preview = preview_payload(&publish.payload);
               let outbound_payload = if mapping.collect_data {
-                let batch_size = mapping_batch_size(mapping);
-                let queue = collected_payloads.entry(mapping_index).or_default();
-                queue.push(payload_to_json_value(&publish.payload));
+                let entries = collected_payloads.entry(mapping_index).or_default();
+                let now = Instant::now();
+                entries.retain(|_, entry| now.duration_since(entry.updated_at) <= Duration::from_secs(120));
+                entries.insert(
+                  publish.topic.clone(),
+                  CollectedPayloadEntry {
+                    source_topic: publish.topic.clone(),
+                    data: payload_to_json_value(&publish.payload),
+                    updated_at: now,
+                  },
+                );
+
+                let collected_list: Vec<ForwardPayloadEntry> = entries
+                  .values()
+                  .map(|entry| ForwardPayloadEntry {
+                    source_topic: entry.source_topic.clone(),
+                    data: entry.data.clone(),
+                  })
+                  .collect();
 
                 emit_bridge_log(
                   &app,
                   &config.id,
                   "info",
                   &format!(
-                    "Collecting data for {} | {}/{} buffered",
+                    "Collecting active data for {} | {} items in list",
                     publish.topic,
-                    queue.len(),
-                    batch_size
+                    collected_list.len()
                   ),
                 );
 
-                if queue.len() < batch_size {
-                  continue;
-                }
-
-                let payload = serde_json::to_vec(queue).unwrap_or_else(|_| b"[]".to_vec());
-                queue.clear();
-
-                emit_bridge_log(
-                  &app,
-                  &config.id,
-                  "success",
-                  &format!(
-                    "Collected batch for {} | forwarding {} items as JSON array",
-                    publish.topic, batch_size
-                  ),
-                );
-
-                payload
+                serde_json::to_vec(&collected_list).unwrap_or_else(|_| b"[]".to_vec())
               } else {
                 publish.payload.to_vec()
               };
@@ -557,18 +573,6 @@ fn preview_payload(payload: &[u8]) -> String {
       }
     }
   }
-}
-
-fn mapping_batch_size(mapping: &TopicMapping) -> usize {
-  mapping
-    .batch_size
-    .as_deref()
-    .unwrap_or("25")
-    .trim()
-    .parse::<usize>()
-    .ok()
-    .filter(|size| *size > 0)
-    .unwrap_or(25)
 }
 
 fn payload_to_json_value(payload: &[u8]) -> Value {
