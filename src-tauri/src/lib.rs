@@ -357,8 +357,8 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   &config.id,
                   "success",
                   &format!(
-                    "Name: {} | Collected count: {} | data: {}",
-                    bridge_label, collected_count, snapshot_preview
+                    "Collected count: {} | data: {}",
+                    collected_count, snapshot_preview
                   ),
                 );
 
@@ -395,8 +395,8 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   &config.id,
                   "success",
                   &format!(
-                    "Name: {} | Forwarded from {} to {} | data: {}",
-                    bridge_label, publish.topic, destination_topic, payload_preview
+                    "Forwarded from {} to {} | data: {}",
+                    publish.topic, destination_topic, payload_preview
                   ),
                 );
               }
