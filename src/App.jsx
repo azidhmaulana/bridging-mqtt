@@ -27,7 +27,7 @@ function BrandIcon() {
   return (
     <span className="brandLogoSlot" aria-hidden="true">
       <img
-        src="/Logo_Polda_Sumbar.png"
+        src="/bridging-data.png"
         alt=""
         className="brandLogoImage"
       />

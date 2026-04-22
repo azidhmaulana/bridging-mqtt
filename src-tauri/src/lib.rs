@@ -157,11 +157,6 @@ fn validate_bridge(config: &BridgeConfig) -> Result<(), String> {
 }
 
 async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
-  let bridge_label = if config._bridge_name.trim().is_empty() {
-    config.id.clone()
-  } else {
-    config._bridge_name.clone()
-  };
   let source_options = match build_mqtt_options(
     &config.source_protocol,
     &config.source_host,
