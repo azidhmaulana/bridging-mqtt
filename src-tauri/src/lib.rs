@@ -29,16 +29,17 @@ struct TopicMapping {
 
 #[derive(Clone, Debug)]
 struct CollectedPayloadEntry {
-  source_topic: String,
   data: Value,
   updated_at: Instant,
+  source_timestamp_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ForwardPayloadEntry {
-  source_topic: String,
-  data: Value,
+struct AggregateSnapshot {
+  generated_at: String,
+  reason: String,
+  entries: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -297,21 +298,30 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                 let entries = collected_payloads.entry(mapping_index).or_default();
                 let now = Instant::now();
                 entries.retain(|_, entry| now.duration_since(entry.updated_at) <= Duration::from_secs(120));
-                entries.insert(
-                  publish.topic.clone(),
-                  CollectedPayloadEntry {
-                    source_topic: publish.topic.clone(),
-                    data: payload_to_json_value(&publish.payload),
-                    updated_at: now,
-                  },
-                );
+                let payload_value = payload_to_json_value(&publish.payload);
+                let payload_key = build_collect_key(&payload_value)
+                  .unwrap_or_else(|| publish.topic.clone());
+                let payload_timestamp_ms = get_payload_timestamp_ms(&payload_value, now);
 
-                let collected_list: Vec<ForwardPayloadEntry> = entries
-                  .values()
-                  .map(|entry| ForwardPayloadEntry {
-                    source_topic: entry.source_topic.clone(),
-                    data: entry.data.clone(),
-                  })
+                let should_update = entries
+                  .get(&payload_key)
+                  .map(|existing| payload_timestamp_ms >= existing.source_timestamp_ms)
+                  .unwrap_or(true);
+
+                if should_update {
+                  entries.insert(
+                    payload_key.clone(),
+                    CollectedPayloadEntry {
+                      data: payload_value,
+                      updated_at: now,
+                      source_timestamp_ms: payload_timestamp_ms,
+                    },
+                  );
+                }
+
+                let collected_map: HashMap<String, Value> = entries
+                  .iter()
+                  .map(|(key, entry)| (key.clone(), entry.data.clone()))
                   .collect();
 
                 emit_bridge_log(
@@ -319,13 +329,19 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   &config.id,
                   "info",
                   &format!(
-                    "Collecting active data for {} | {} items in list",
+                    "Collecting active data for {} | {} active entries",
                     publish.topic,
-                    collected_list.len()
+                    collected_map.len()
                   ),
                 );
 
-                serde_json::to_vec(&collected_list).unwrap_or_else(|_| b"[]".to_vec())
+                let snapshot = AggregateSnapshot {
+                  generated_at: iso_now(),
+                  reason: "update".to_string(),
+                  entries: collected_map,
+                };
+
+                serde_json::to_vec(&snapshot).unwrap_or_else(|_| b"{}".to_vec())
               } else {
                 publish.payload.to_vec()
               };
@@ -580,6 +596,140 @@ fn payload_to_json_value(payload: &[u8]) -> Value {
     .ok()
     .and_then(|text| serde_json::from_str::<Value>(text).ok())
     .unwrap_or_else(|| Value::String(preview_payload(payload)))
+}
+
+fn build_collect_key(payload: &Value) -> Option<String> {
+  let object = payload.as_object()?;
+
+  object
+    .get("identity")
+    .and_then(|identity| identity.as_object())
+    .and_then(|identity| identity.get("id"))
+    .and_then(value_to_key_string)
+    .or_else(|| object.get("serial_number").and_then(value_to_key_string))
+    .or_else(|| object.get("device_id").and_then(value_to_key_string))
+    .or_else(|| object.get("deviceId").and_then(value_to_key_string))
+    .or_else(|| object.get("id").and_then(value_to_key_string))
+}
+
+fn value_to_key_string(value: &Value) -> Option<String> {
+  match value {
+    Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+    Value::Number(number) => Some(number.to_string()),
+    _ => None,
+  }
+}
+
+fn get_payload_timestamp_ms(payload: &Value, fallback: Instant) -> i64 {
+  extract_timestamp_ms(payload).unwrap_or_else(|| instant_to_epoch_ms(fallback))
+}
+
+fn extract_timestamp_ms(payload: &Value) -> Option<i64> {
+  let object = payload.as_object()?;
+
+  object
+    .get("gps")
+    .and_then(|gps| gps.as_object())
+    .and_then(|gps| gps.get("gps_timestamp"))
+    .and_then(value_to_timestamp_ms)
+    .or_else(|| object.get("timestamp").and_then(value_to_timestamp_ms))
+    .or_else(|| object.get("received_at_unix").and_then(value_to_timestamp_ms))
+}
+
+fn value_to_timestamp_ms(value: &Value) -> Option<i64> {
+  match value {
+    Value::Number(number) => {
+      let raw = number.as_i64()?;
+      Some(if raw < 1_000_000_000_000 { raw * 1000 } else { raw })
+    }
+    Value::String(text) => {
+      if let Ok(parsed) = text.parse::<i64>() {
+        Some(if parsed < 1_000_000_000_000 { parsed * 1000 } else { parsed })
+      } else {
+        None
+      }
+    }
+    _ => None,
+  }
+}
+
+fn instant_to_epoch_ms(instant: Instant) -> i64 {
+  let now_instant = Instant::now();
+  let now_epoch = std::time::SystemTime::now();
+
+  let system_time = if instant <= now_instant {
+    now_epoch
+      .checked_sub(now_instant.duration_since(instant))
+      .unwrap_or(now_epoch)
+  } else {
+    now_epoch
+      .checked_add(instant.duration_since(now_instant))
+      .unwrap_or(now_epoch)
+  };
+
+  system_time
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|duration| duration.as_millis() as i64)
+    .unwrap_or(0)
+}
+
+fn iso_now() -> String {
+  let now = chrono_like_now();
+  format!(
+    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+    now.year, now.month, now.day, now.hour, now.minute, now.second, now.millisecond
+  )
+}
+
+struct DateParts {
+  year: i32,
+  month: u32,
+  day: u32,
+  hour: u32,
+  minute: u32,
+  second: u32,
+  millisecond: u32,
+}
+
+fn chrono_like_now() -> DateParts {
+  let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default();
+  let total_millis = now.as_millis() as i64;
+  let total_seconds = total_millis / 1000;
+  let millisecond = (total_millis % 1000) as u32;
+  let days = total_seconds.div_euclid(86_400);
+  let seconds_of_day = total_seconds.rem_euclid(86_400);
+
+  let (year, month, day) = civil_from_days(days);
+  let hour = (seconds_of_day / 3600) as u32;
+  let minute = ((seconds_of_day % 3600) / 60) as u32;
+  let second = (seconds_of_day % 60) as u32;
+
+  DateParts {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    millisecond,
+  }
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+  let z = days_since_unix_epoch + 719_468;
+  let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+  let doe = z - era * 146_097;
+  let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+  let y = yoe + era * 400;
+  let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  let mp = (5 * doy + 2) / 153;
+  let d = doy - (153 * mp + 2) / 5 + 1;
+  let m = mp + if mp < 10 { 3 } else { -9 };
+  let year = y + if m <= 2 { 1 } else { 0 };
+
+  (year as i32, m as u32, d as u32)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
