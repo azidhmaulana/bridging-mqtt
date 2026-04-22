@@ -1,0 +1,59 @@
+:root {
+  --bg: #181d22;
+  --bg-soft: #20272d;
+  --panel: linear-gradient(180deg, rgba(40, 47, 55, 0.96), rgba(31, 38, 45, 0.98));
+  --line-soft: rgba(120, 132, 144, 0.28);
+  --neon-cyan: #8ea5b5;
+  --neon-cyan-soft: rgba(142, 165, 181, 0.2);
+  --neon-cyan-mid: rgba(142, 165, 181, 0.34);
+  --neon-cyan-strong: rgba(142, 165, 181, 0.52);
+  --neon-cyan-glow: rgba(142, 165, 181, 0.08);
+  --neon-green: #78b58a;
+  --neon-green-soft: rgba(120, 181, 138, 0.3);
+  --neon-yellow: #c1ae72;
+  --neon-yellow-soft: rgba(193, 174, 114, 0.3);
+  --neon-red: #b67878;
+  --neon-red-soft: rgba(182, 120, 120, 0.3);
+  --text: #a8b2ba;
+  --text-dim: #9ba5ad;
+  --text-strong: #e4e8eb;
+  --shadow: none;
+  --sans: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  --heading: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  --mono: 'IBM Plex Mono', 'Consolas', monospace;
+
+  font-family: var(--sans);
+  line-height: 1.4;
+  font-weight: 400;
+  color: var(--text);
+  background: linear-gradient(180deg, var(--bg), var(--bg-soft));
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, var(--bg), var(--bg-soft));
+}
+
+a,
+button {
+  color: inherit;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
