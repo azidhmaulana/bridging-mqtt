@@ -19,6 +19,10 @@ struct BridgeRuntime {
   task: JoinHandle<()>,
 }
 
+enum BridgeSessionEnd {
+  Restart(String),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TopicMapping {
@@ -157,60 +161,6 @@ fn validate_bridge(config: &BridgeConfig) -> Result<(), String> {
 }
 
 async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
-  let source_options = match build_mqtt_options(
-    &config.source_protocol,
-    &config.source_host,
-    &config.source_port,
-    &config.source_client_id,
-    &config.source_username,
-    &config.source_password,
-  ) {
-    Ok(options) => options,
-    Err(error) => {
-      emit_bridge_log(
-        &app,
-        &config.id,
-        "error",
-        &format!("Invalid source configuration: {error}"),
-      );
-      emit_bridge_status(
-        &app,
-        &config.id,
-        "disconnected",
-        false,
-        Some(error),
-      );
-      return;
-    }
-  };
-
-  let destination_options = match build_mqtt_options(
-    &config.destination_protocol,
-    &config.destination_host,
-    &config.destination_port,
-    &config.destination_client_id,
-    &config.destination_username,
-    &config.destination_password,
-  ) {
-    Ok(options) => options,
-    Err(error) => {
-      emit_bridge_log(
-        &app,
-        &config.id,
-        "error",
-        &format!("Invalid destination configuration: {error}"),
-      );
-      emit_bridge_status(
-        &app,
-        &config.id,
-        "disconnected",
-        false,
-        Some(error),
-      );
-      return;
-    }
-  };
-
   let mappings: Vec<TopicMapping> = config
     .topic_mappings
     .iter()
@@ -218,36 +168,118 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
     .cloned()
     .collect();
 
-  let (source_client, mut source_eventloop) = AsyncClient::new(source_options, 16);
-  let (destination_client, mut destination_eventloop) = AsyncClient::new(destination_options, 16);
-
-  for mapping in &mappings {
+  if mappings.is_empty() {
     emit_bridge_log(
       &app,
       &config.id,
-      "info",
-      &format!(
-        "Subscribing {} -> {}",
-        mapping.source, mapping.destination
-      ),
+      "error",
+      "No valid topic mappings available to start the bridge",
     );
-    if let Err(error) = source_client.subscribe(mapping.source.clone(), QoS::AtLeastOnce).await {
-      emit_bridge_log(
-        &app,
-        &config.id,
-        "error",
-        &format!("Subscribe failed for {}: {error}", mapping.source),
-      );
-      emit_bridge_status(
-        &app,
-        &config.id,
-        "disconnected",
-        false,
-        Some(format!("Subscribe failed: {error}")),
-      );
-      return;
+    emit_bridge_status(
+      &app,
+      &config.id,
+      "disconnected",
+      false,
+      Some("No valid topic mappings".into()),
+    );
+    return;
+  }
+
+  loop {
+    let source_options = match build_mqtt_options(
+      &config.source_protocol,
+      &config.source_host,
+      &config.source_port,
+      &config.source_client_id,
+      &config.source_username,
+      &config.source_password,
+    ) {
+      Ok(options) => options,
+      Err(error) => {
+        emit_bridge_log(
+          &app,
+          &config.id,
+          "error",
+          &format!("Invalid source configuration: {error}"),
+        );
+        emit_bridge_status(
+          &app,
+          &config.id,
+          "disconnected",
+          false,
+          Some(error),
+        );
+        return;
+      }
+    };
+
+    let destination_options = match build_mqtt_options(
+      &config.destination_protocol,
+      &config.destination_host,
+      &config.destination_port,
+      &config.destination_client_id,
+      &config.destination_username,
+      &config.destination_password,
+    ) {
+      Ok(options) => options,
+      Err(error) => {
+        emit_bridge_log(
+          &app,
+          &config.id,
+          "error",
+          &format!("Invalid destination configuration: {error}"),
+        );
+        emit_bridge_status(
+          &app,
+          &config.id,
+          "disconnected",
+          false,
+          Some(error),
+        );
+        return;
+      }
+    };
+
+    emit_bridge_status(
+      &app,
+      &config.id,
+      "reconnect",
+      true,
+      Some("Establishing MQTT session".into()),
+    );
+
+    match run_bridge_session(
+      &app,
+      &config,
+      &mappings,
+      source_options,
+      destination_options,
+    )
+    .await
+    {
+      BridgeSessionEnd::Restart(reason) => {
+        emit_bridge_log(
+          &app,
+          &config.id,
+          "warn",
+          &format!("Restarting bridge session: {reason}"),
+        );
+        emit_bridge_status(&app, &config.id, "reconnect", true, Some(reason));
+        sleep(Duration::from_secs(1)).await;
+      }
     }
   }
+}
+
+async fn run_bridge_session(
+  app: &AppHandle,
+  config: &BridgeConfig,
+  mappings: &[TopicMapping],
+  source_options: MqttOptions,
+  destination_options: MqttOptions,
+) -> BridgeSessionEnd {
+  let (source_client, mut source_eventloop) = AsyncClient::new(source_options, 16);
+  let (destination_client, mut destination_eventloop) = AsyncClient::new(destination_options, 16);
 
   let mut source_ready = false;
   let mut destination_ready = false;
@@ -261,26 +293,43 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
           Ok(Event::Incoming(Packet::ConnAck(_))) => {
             source_ready = true;
             emit_bridge_log(
-              &app,
+              app,
               &config.id,
               "info",
               "Source broker connected",
             );
-            if destination_ready {
-              emit_bridge_status(&app, &config.id, "connected", true, None);
+            for mapping in mappings {
               emit_bridge_log(
-                &app,
+                app,
+                &config.id,
+                "info",
+                &format!("Subscribing {} -> {}", mapping.source, mapping.destination),
+              );
+              if let Err(error) = source_client.subscribe(mapping.source.clone(), QoS::AtLeastOnce).await {
+                return BridgeSessionEnd::Restart(format!(
+                  "Subscribe failed for {}: {error}",
+                  mapping.source
+                ));
+              }
+            }
+            if destination_ready {
+              emit_bridge_status(app, &config.id, "connected", true, None);
+              emit_bridge_log(
+                app,
                 &config.id,
                 "success",
                 "Bridge connected and ready",
               );
             }
           }
+          Ok(Event::Outgoing(Outgoing::Disconnect)) => {
+            return BridgeSessionEnd::Restart("Source broker disconnected".into());
+          }
           Ok(Event::Incoming(Packet::Publish(publish))) => {
-            if let Some((mapping_index, mapping)) = resolve_topic_mapping(&mappings, &publish.topic) {
+            if let Some((mapping_index, mapping)) = resolve_topic_mapping(mappings, &publish.topic) {
               let destination_topic = mapping.destination.clone();
               emit_bridge_log(
-                &app,
+                app,
                 &config.id,
                 "info",
                 &format!(
@@ -321,7 +370,7 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                 let collected_count = collected_map.len();
 
                 emit_bridge_log(
-                  &app,
+                  app,
                   &config.id,
                   "info",
                   &format!(
@@ -348,7 +397,7 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                   .unwrap_or_else(|_| "{}".to_string());
 
                 emit_bridge_log(
-                  &app,
+                  app,
                   &config.id,
                   "success",
                   &format!(
@@ -371,13 +420,14 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                 .await
               {
                 emit_bridge_log(
-                  &app,
+                  app,
                   &config.id,
                   "error",
                   &format!("Publish failed: {error}"),
                 );
+                destination_ready = false;
                 emit_bridge_status(
-                  &app,
+                  app,
                   &config.id,
                   "reconnect",
                   true,
@@ -386,7 +436,7 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
                 sleep(Duration::from_millis(400)).await;
               } else {
                 emit_bridge_log(
-                  &app,
+                  app,
                   &config.id,
                   "success",
                   &format!(
@@ -399,14 +449,15 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
           }
           Ok(_) => {}
           Err(error) => {
+            source_ready = false;
             emit_bridge_log(
-              &app,
+              app,
               &config.id,
               "warn",
               &format!("Source broker reconnecting: {error}"),
             );
             emit_bridge_status(
-              &app,
+              app,
               &config.id,
               "reconnect",
               true,
@@ -421,15 +472,15 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
           Ok(Event::Incoming(Packet::ConnAck(_))) => {
             destination_ready = true;
             emit_bridge_log(
-              &app,
+              app,
               &config.id,
               "info",
               "Destination broker connected",
             );
             if source_ready {
-              emit_bridge_status(&app, &config.id, "connected", true, None);
+              emit_bridge_status(app, &config.id, "connected", true, None);
               emit_bridge_log(
-                &app,
+                app,
                 &config.id,
                 "success",
                 "Bridge connected and ready",
@@ -437,20 +488,19 @@ async fn run_bridge_task(app: AppHandle, config: BridgeConfig) {
             }
           }
           Ok(Event::Outgoing(Outgoing::Disconnect)) => {
-            emit_bridge_log(&app, &config.id, "warn", "Destination broker disconnected");
-            emit_bridge_status(&app, &config.id, "disconnected", false, None);
-            return;
+            return BridgeSessionEnd::Restart("Destination broker disconnected".into());
           }
           Ok(_) => {}
           Err(error) => {
+            destination_ready = false;
             emit_bridge_log(
-              &app,
+              app,
               &config.id,
               "warn",
               &format!("Destination broker reconnecting: {error}"),
             );
             emit_bridge_status(
-              &app,
+              app,
               &config.id,
               "reconnect",
               true,

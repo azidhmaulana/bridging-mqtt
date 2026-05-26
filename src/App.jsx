@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import packageInfo from "../package.json";
+import InformationModal from "./components/InformationModal";
 import "./App.css";
 
 const pad = (value) => String(value).padStart(2, "0");
@@ -1085,55 +1086,60 @@ function App() {
         </div>
       ) : null}
 
-      {isAboutOpen ? (
-        <div
-          className="modalOverlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="about-title"
-        >
-          <div className="modalFrame aboutModalFrame">
-            <header className="modalHeader">
-              <div>
-                <span className="modalEyebrow">About</span>
-                <h2 id="about-title" className="modalTitle">
-                  BRIDGE Data
-                </h2>
-              </div>
-
-              <div className="modalHeaderRail" aria-hidden="true" />
-
+      <InformationModal
+        open={isAboutOpen}
+        title="Bridge MQTT"
+        eyebrow="About Software"
+        onClose={() => setIsAboutOpen(false)}
+        footer={
+          <>
+            <div className="informationModalFooterRail" aria-hidden="true" />
+            <div className="informationModalFooterDots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="informationModalFooterMeta">
+              <strong>Bridge MQTT</strong>
+              <span>STAR INTI TEKNOLOGI</span>
+            </div>
+            <div className="informationModalFooterActions">
               <button
                 type="button"
-                className="modalCloseButton"
-                aria-label="Close about modal"
+                className="informationModalButton"
                 onClick={() => setIsAboutOpen(false)}
               >
-                <span />
+                Close
               </button>
-            </header>
-
-            <div className="aboutBody">
-              <p>MQTT bridge dashboard built with Tauri and React.</p>
-              <p>Dev : azidhmaulana</p>
-              <p>Ver : {appVersion}</p>
             </div>
+          </>
+        }
+      >
+        <div className="informationModalStack">
+          <section className="informationCard informationCardHero">
+            <h3 className="informationCardTitle">Bridge MQTT</h3>
+            <p className="informationCardText">
+              &copy; Bridge MQTT — A real-time MQTT-based data bridging
+              application designed to connect, route, and integrate devices and
+              systems efficiently and flexibly.
+            </p>
+          </section>
 
-            <footer className="modalFooter">
-              <div className="modalFooterRail" aria-hidden="true" />
-              <div className="modalActions">
-                <button
-                  type="button"
-                  className="primaryAction"
-                  onClick={() => setIsAboutOpen(false)}
-                >
-                  Close
-                </button>
-              </div>
-            </footer>
-          </div>
+          <section className="informationCard informationCardDetails">
+            <h4 className="informationSectionTitle">Star Inti Teknologi</h4>
+            <p className="informationCardText">
+              Copyright 2026 Star Inti Teknologi | All rights reserved &copy;
+              2026. All rights reserved.
+            </p>
+            <p className="informationCardText">
+              Developed by Radtelindo | azidhmaulana.
+            </p>
+            <p className="informationCardText">
+              Version {appVersion} (official release)
+            </p>
+          </section>
         </div>
-      ) : null}
+      </InformationModal>
     </main>
   );
 }
